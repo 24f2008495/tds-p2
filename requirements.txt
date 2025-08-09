@@ -1,0 +1,14 @@
+Flask
+Flask-CORS
+python-dotenv
+requests
+openai
+beautifulsoup4
+lxml
+selenium
+webdriver-manager
+pandas
+numpy
+matplotlib
+seaborn
+duckdb
