@@ -10,8 +10,9 @@ import base64
 import re
 from typing import Any, Dict, List
 import warnings
-from openai import OpenAI
+from langfuse.openai import OpenAI
 from config import LLM_API_KEY
+from file_manager import file_manager
 import duckdb
 
 # Suppress warnings for cleaner output
@@ -54,7 +55,10 @@ class AnalysisAgent:
                     {"role": "system", "content": prompt["system_prompt"]}, 
                     {"role": "user", "content": prompt["user_prompt"]}
                 ],
-                temperature=0.1
+                # Langfuse tagging
+                metadata={
+                    "langfuse_tags": ["analysis-agent"]
+                }
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -93,8 +97,10 @@ class AnalysisAgent:
         else:
             return f"Data type: {type(data)}, Value: {str(data)[:200]}"
 
-    def _generate_analysis_code(self, question: str, instructions: str, data_structure: str, sample_data: Any) -> str:
+    def _generate_analysis_code(self, question: str, instructions: str, data_structure: str, sample_data: Any, file_mapping: dict = None) -> str:
         """Generate Python code to perform the requested analysis"""
+        if file_mapping is None:
+            file_mapping = {}
         
         system_prompt = """You are a Python code generation expert specializing in data analysis. Your task is to generate Python code that performs the requested analysis on the given data.
 
@@ -102,10 +108,10 @@ Key requirements:
 1. The code should be complete and executable
 2. Use pandas, numpy, matplotlib for analysis and visualization
 3. For DuckDB queries, use the available duckdb_conn connection object
-4. For visualizations, return base64 encoded PNG images as data URIs
+4. For visualizations, save as PNG files using plt.savefig() and return the filename
 5. Handle data type conversions (like removing '$' and 'T' from monetary values)
 6. The code should store results in a variable called 'analysis_results'
-7. For images, store them as base64 data URIs in the results
+7. For images, store the saved filename in the results (not base64)
 8. Be robust to data variations and missing values
 9. Use proper statistical methods for correlations and analysis
 
@@ -123,20 +129,57 @@ DATA CLEANING GUIDELINES: Always handle data type conversions robustly:
 - Handle missing values with df.dropna() or df.fillna() as appropriate
 - Convert dates with pd.to_datetime(df['column'], errors='coerce')
 
-MATPLOTLIB GUIDELINES: Always close figures properly:
-- Use plt.close() or plt.close('all') after saving plots to prevent memory leaks
-- For multiple plots, use plt.figure() to create new figures and close each one
+MATPLOTLIB GUIDELINES: Save plots as files and return filenames:
+- Create plots using matplotlib
+- Save plots using file_manager.save_generated_file() with the image bytes
+- Example: 
+  ```
+  fig, ax = plt.subplots()
+  # ... create plot ...
+  buffer = BytesIO()
+  plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+  image_bytes = buffer.getvalue()
+  plt.close()
+  saved_filename = file_manager.save_generated_file("scatterplot.png", image_bytes, "graph")
+  ```
+- Close figures with plt.close() to prevent memory leaks
+- Return ONLY the saved filename in analysis_results (never base64 data)
 
-RESULT FORMAT: The final result MUST be stored in a variable called 'analysis_results' as a DICTIONARY with descriptive keys, not a list or array. For example:
+CRITICAL: NEVER include base64 data in analysis_results. Always save images as files and return only filenames.
+
+RESULT FORMAT: The final result MUST be stored in a variable called 'analysis_results' as a DICTIONARY with descriptive keys. For images, store ONLY the filename:
 analysis_results = {
     "movies_2bn_before_2020": count_value,
     "earliest_film_over_1_5bn": film_title,
     "correlation_rank_peak": correlation_value,
-    "scatterplot_image": image_data_uri
+    "scatterplot_image": saved_filename  # FILENAME ONLY, NOT BASE64
 }
 
-Available libraries: pandas, numpy, matplotlib, seaborn, re, base64, io, duckdb (via duckdb_conn)
+Available libraries: pandas, numpy, matplotlib, seaborn, re, base64, io, duckdb (via duckdb_conn), file_manager
+
+ADDITIONAL FILES ACCESS:
+- Additional files are saved and their paths are available in the 'file_mapping' dictionary
+- Use file_manager.get_file_path(file_mapping['original_name']) to get the full path
+- Example: df = pd.read_csv(file_manager.get_file_path(file_mapping['data.csv']))
+- Available files: """ + str(list(file_mapping.keys()) if file_mapping else "None") + """
 """
+
+        # Get file previews for context
+        file_previews = {}
+        for original_name, saved_name in file_mapping.items():
+            try:
+                file_path = file_manager.get_file_path(saved_name)
+                if file_path and original_name.lower().endswith(('.csv', '.txt', '.json', '.tsv')):
+                    # Read first few lines for preview
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = []
+                        for i, line in enumerate(f):
+                            if i >= 3:  # Only first 3 lines
+                                break
+                            lines.append(line.strip())
+                        file_previews[original_name] = '\n'.join(lines)
+            except Exception as e:
+                file_previews[original_name] = f"Error reading preview: {str(e)}"
 
         user_prompt = f"""
 Question: {question}
@@ -147,17 +190,31 @@ Data Structure: {data_structure}
 
 Sample Data (first few items): {str(sample_data)[:1000]}
 
+Additional Files Available: {list(file_mapping.keys()) if file_mapping else "None"}
+File Mapping: {file_mapping}
+
+File Previews:
+{json.dumps(file_previews, indent=2) if file_previews else "No additional files"}
+
 Generate Python code that:
 1. Processes the data (data is available in variable 'data')
-2. Performs the requested analysis
-3. Stores results in 'analysis_results' dictionary
-4. For visualizations, convert to base64 data URI format
-5. Handle data cleaning robustly - remove '$', commas, and any non-numeric prefixes/suffixes from monetary values
-6. Convert string numbers to appropriate data types safely
+2. Use additional files as needed (access via file_manager.get_file_path(file_mapping['filename']))
+3. Performs the requested analysis
+4. Stores results in 'analysis_results' dictionary
+5. For visualizations, save using file_manager.save_generated_file() and store filename in results
+6. Handle data cleaning robustly - remove '$', commas, and any non-numeric prefixes/suffixes from monetary values
+7. Convert string numbers to appropriate data types safely
 
 CRITICAL REMINDER: Return ONLY the raw Python code. NO markdown formatting, NO explanations, NO code blocks.
 
-The code should be ready to execute with the data variable already available.
+The code should be ready to execute with the data variable and file_mapping dictionary already available.
+
+REMINDER: For any visualizations/plots:
+1. Create the plot using matplotlib
+2. Save to BytesIO buffer: buffer = BytesIO(); plt.savefig(buffer, format='png'); image_bytes = buffer.getvalue()
+3. Use file_manager.save_generated_file(filename, image_bytes, "graph") to save
+4. Store ONLY the returned filename in analysis_results
+5. NEVER store base64 data in analysis_results
 """
 
         prompt = {
@@ -214,9 +271,7 @@ The code should be ready to execute with the data variable already available.
         return response
 
     def _process_analysis_results(self, results) -> Dict:
-        """Process analysis results to handle image data properly"""
-        import os
-        
+        """Process analysis results - simplified version that just handles numpy types"""
         # Handle both dict and list formats
         if isinstance(results, list):
             # Convert list to dict with indices as keys
@@ -230,39 +285,13 @@ The code should be ready to execute with the data variable already available.
         processed_results = {}
         
         for key, value in dict_results.items():
-            if isinstance(value, str) and value.startswith("data:image/"):
-                # This is a base64 image data URI
-                try:
-                    # Extract the base64 data
-                    header, base64_data = value.split(",", 1)
-                    
-                    # Save to storage directory (relative to project root)
-                    os.makedirs("storage", exist_ok=True)
-                    image_filename = f"analysis_image_{key}_{hash(base64_data) % 10000}.png"
-                    image_path = f"storage/{image_filename}"
-                    
-                    # Decode and save the image
-                    import base64
-                    image_bytes = base64.b64decode(base64_data)
-                    with open(image_path, "wb") as f:
-                        f.write(image_bytes)
-                    
-                    # Store the full data URI but print truncated version
-                    processed_results[key] = value
-                    print(f"Image saved to: {image_path}")
-                    print(f"Base64 data (first 50 chars): {value[:50]}...")
-                    
-                except Exception as e:
-                    print(f"Error processing image for {key}: {e}")
-                    processed_results[key] = value
+            # Convert numpy types to Python native types
+            if hasattr(value, 'item'):  # numpy scalars have .item() method
+                processed_results[key] = value.item()
+            elif isinstance(value, np.ndarray):
+                processed_results[key] = value.tolist()
             else:
-                # Convert numpy types to Python native types
-                if hasattr(value, 'item'):  # numpy scalars have .item() method
-                    processed_results[key] = value.item()
-                elif isinstance(value, np.ndarray):
-                    processed_results[key] = value.tolist()
-                else:
-                    processed_results[key] = value
+                processed_results[key] = value
         
         # If original was a list, also preserve the list format
         if isinstance(results, list):
@@ -271,8 +300,13 @@ The code should be ready to execute with the data variable already available.
                 
         return processed_results
 
-    def _execute_analysis_code(self, code: str, data: Any) -> Dict:
+    # Remove the old _save_additional_files method - now handled by file_manager
+
+    def _execute_analysis_code(self, code: str, data: Any, file_mapping: dict = None) -> Dict:
         """Safely execute the generated analysis code"""
+        if file_mapping is None:
+            file_mapping = {}
+            
         try:
             # Extract Python code from markdown if needed
             clean_code = self._extract_python_code(code)
@@ -288,7 +322,10 @@ The code should be ready to execute with the data variable already available.
                 'base64': base64,
                 're': re,
                 'duckdb_conn': self.duckdb_conn,
-                'analysis_results': {}
+                'analysis_results': {},
+                'file_mapping': file_mapping,  # Make file mapping available to the code
+                'file_manager': file_manager,  # Make file manager available
+                'os': __import__('os')  # Make os module available
             }
             
             # Execute the generated code
@@ -303,7 +340,7 @@ The code should be ready to execute with the data variable already available.
             if not results:
                 return {"status": "error", "error": "No analysis_results found in executed code"}
             
-            # Process results to handle images properly
+            # Process results to handle numpy types
             processed_results = self._process_analysis_results(results)
             
             return {"status": "success", "data": processed_results}
@@ -311,14 +348,18 @@ The code should be ready to execute with the data variable already available.
         except Exception as e:
             return {"status": "error", "error": f"Error executing analysis code: {str(e)}"}
 
-    def analyze(self, question: str, instructions: str, parameter: Any):
+    def analyze(self, question: str, instructions: str, parameter: Any, file_mapping: dict = None):
         """Main analysis method that coordinates the entire analysis process"""
+        if file_mapping is None:
+            file_mapping = {}
+            
         print("Analyzing data...")
         print("Question:")
         print(question)
         print("Instructions:")  
         print(instructions)
         print("Parameter type:", type(parameter))
+        print("File mapping:", file_mapping)
         print("--------------------------------")
         
         try:
@@ -334,27 +375,20 @@ The code should be ready to execute with the data variable already available.
             print(data_structure)
             print("--------------------------------")
             
-            # Step 2: Generate analysis code
+            # Step 2: Generate analysis code (include file info in the prompt)
             sample_data = data[:3] if isinstance(data, list) and len(data) > 3 else data
-            analysis_code = self._generate_analysis_code(question, instructions, data_structure, sample_data)
+            analysis_code = self._generate_analysis_code(question, instructions, data_structure, sample_data, file_mapping)
             
             if not analysis_code:
                 return {"status": "error", "error": "Failed to generate analysis code"}
             
-            print("Generated Analysis Code:")
-            print(analysis_code)
-            print("--------------------------------")
-            
             # Step 3: Execute the analysis code
-            execution_result = self._execute_analysis_code(analysis_code, data)
+            execution_result = self._execute_analysis_code(analysis_code, data, file_mapping)
             
             if execution_result["status"] == "error":
                 return execution_result
             
             analysis_results = execution_result["data"]
-            print("Analysis Results:")
-            print(analysis_results)
-            print("--------------------------------")
             
             return {"status": "success", "data": analysis_results}
             

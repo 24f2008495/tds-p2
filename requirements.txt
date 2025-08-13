@@ -12,3 +12,4 @@ numpy
 matplotlib
 seaborn
 duckdb
+langfuse

@@ -1,10 +1,11 @@
-from openai import OpenAI
+from langfuse.openai import OpenAI
 import json
 import os
 from config import LLM_API_KEY
 from agents.analysis import AnalysisAgent
 from agents.formatter import FormatterAgent
 from agents.scraper import ScraperAgent
+from file_manager import file_manager
 from urllib.parse import urlparse
 import logging
 
@@ -13,11 +14,11 @@ class OrchestratorAgent:
         self.model = "gpt-4.1"
         self.client = OpenAI(api_key=LLM_API_KEY)
         self.logger = logging.getLogger(__name__)
+
         self.context = {
-            "current_data": None,
-            "analysis_results": None,
-            "graphs_generated": [],
-            "final_output": None
+            "current_data": None, # contains the current data model is using for analysis (will also contain the data from the additional files and results from scraping (if scrape tool is used))
+            "analysis_results": None, # contains the analysis results after data_analysis tool is used
+            "final_output": None # contains the final output after format_final_output tool is used (this is the final answer to the question to be returned to the user)
         }
         
         # Available tools for the agent
@@ -33,14 +34,16 @@ class OrchestratorAgent:
                 "returns": "dict with analysis details and base64 encoded graphs"
             },
             "format_final_output": {
-                "description": "Formats the final output for presentation",
+                "description": "Formats the final output for API response in expected format",
                 "parameters": {"data": "any"},
                 "returns": "formatted final output"
             }
         }
 
-    def _get_prompt(self, question: str):
+    def _get_prompt(self, question: str, additional_files: dict = None):
         """Returns a structured prompt for the OpenAI completions API"""
+        if additional_files is None:
+            additional_files = {}
         
         system_prompt = f"""You are an intelligent task orchestrator for a data analysis task that decides the next action based on the question, current context, and available tools.
 
@@ -60,25 +63,23 @@ INSTRUCTIONS:
 
 4. Only choose ONE tool per response
 5. Consider the conversation flow and current context
-6. If the question can be answered with current data, use format_final_output
-7. If you need new data, use scrape
-8. If you have data but need analysis, use data_analysis
-9. If you need visualization, use make_graph
-10. If you have all the information you need to finally answer the question, use format_final_output
+6. If you need new data that is not in the current context, use scrape
+7. If you have data but need analysis, use data_analysis (This also does visualization, graph generation, etc.)
+8. If you have all the information you need to finally answer the question, use format_final_output
 
 IMPORTANT PARAMETER USAGE:
-- The question is ALWAYS automatically sent to every tool, so empty context is perfectly fine
+- The question and additional files are ALWAYS automatically sent to every tool, so empty context is perfectly fine
 - Use tool_parameter ONLY when the tool specifically needs data from context (like "context.current_data" or "context.analysis_results")
 - If the tool only needs the question, use an empty string "" or "context.current_data" as appropriate
 
 CRITICAL DATA HANDLING GUIDELINES:
-11. BEFORE choosing scrape for large datasets (>1GB, >100K records, or academic/research datasets):
+1. BEFORE choosing scrape for large datasets (>1GB, >100K records, or academic/research datasets):
     - Think logically about whether scraping is realistic and appropriate
     - Large government datasets, academic repositories, or APIs often provide direct access methods
     - Questions involving "big data" (court records, financial data, census data) likely reference existing datasets
     - If a question mentions specific dataset URLs or sources, check if it's meant to be accessed directly rather than scraped
     - Consider if the data is already publicly available in structured formats (parquet, CSV, SQL databases)
-12. For questions involving remote datasets or databases, prefer data_analysis over scrape when:
+2. For questions involving remote datasets or databases, prefer data_analysis over scrape when:
     - The dataset is mentioned by name and is publicly accessible
     - URLs point to structured data files (parquet, CSV, JSON)
     - The question involves SQL-like operations or large-scale analytics
@@ -176,14 +177,59 @@ Answer:
                 else:
                     display_context[key] = str_value
         
+        # Process additional files information for prompt with previews
+        files_info = {}
+        if additional_files:
+            for filename, file_obj in additional_files.items():
+                try:
+                    # Reset file pointer and get size
+                    file_obj.seek(0, 2)  # Seek to end
+                    file_size = file_obj.tell()
+                    file_obj.seek(0)  # Reset to beginning
+                    
+                    file_type = filename.split('.')[-1] if '.' in filename else "unknown"
+                    
+                    # Get content preview for readable files
+                    content_preview = ""
+                    if filename.lower().endswith(('.csv', '.txt', '.json', '.tsv')):
+                        try:
+                            content = file_obj.read(500).decode('utf-8', errors='ignore')
+                            lines = content.split('\n')[:3]
+                            content_preview = '\n'.join(lines) + ('...' if len(lines) >= 3 else '')
+                            file_obj.seek(0)  # Reset again
+                        except:
+                            content_preview = "Text file (content not readable)"
+                    elif filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                        content_preview = f"Image file ({file_size} bytes)"
+                    else:
+                        content_preview = f"Binary file ({file_size} bytes)"
+                    
+                    files_info[filename] = {
+                        "type": file_type,
+                        "size": file_size,
+                        "available": True,
+                        "preview": content_preview
+                    }
+                except Exception as e:
+                    files_info[filename] = {"type": "unknown", "available": False, "error": str(e)}
+
         user_prompt = f"""
         Based on the question and the current context, decide what tool to use next and return the structured JSON response. 
         
         CONTEXT:
+        ```
         {json.dumps(display_context, indent=2)}
+        ```
 
         CURRENT QUESTION:
+        ```
         {question}
+        ```
+        
+        ADDITIONAL FILES PROVIDED:
+        ```
+        {json.dumps(files_info, indent=2) if files_info else "None"}
+        ```
 
         ONLY GIVE JSON RESPONSE, NO OTHER TEXT. DO NOT INCLUDE ANY MARKDOWN FORMATTING OF THE JSON RESPONSE."""
 
@@ -201,7 +247,10 @@ Answer:
                     {"role": "system", "content": prompt["system_prompt"]}, 
                     {"role": "user", "content": prompt["user_prompt"]}
                 ],
-                temperature=0.1
+                # Langfuse tagging
+                metadata={
+                    "langfuse_tags": ["orchestrator-agent"]
+                }
             )
             if response and response.choices and len(response.choices) > 0:
                 return response.choices[0].message.content
@@ -212,8 +261,10 @@ Answer:
             self.logger.error(f"Error calling OpenAI API: {e}")
             return None
 
-    def process_question(self, question: str):
+    def process_question(self, question: str, additional_files: dict = None):
         """Process a question and return the next action decision"""
+        if additional_files is None:
+            additional_files = {}
 
         analysis_agent = AnalysisAgent()
         formatter_agent = FormatterAgent()
@@ -223,20 +274,12 @@ Answer:
         while True:
             # Get the structured prompt
             try:
-                prompt = self._get_prompt(question)
-                self.logger.info("Prompt:")
-                self.logger.info(prompt)
-                self.logger.info("--------------------------------")
+                prompt = self._get_prompt(question, additional_files)
                 response = self._get_response(prompt)
-                self.logger.info("Response:")
-                self.logger.info(response)
-                self.logger.info("--------------------------------")
                 try:
                     response_json = json.loads(response)
                 except json.JSONDecodeError:
                     raise Exception("Failed to parse response as JSON")
-                self.logger.info(response_json)
-                self.logger.info("--------------------------------")
                 
                 # Execute the tool
                 tool_name = response_json["tool_name"]
@@ -257,9 +300,6 @@ Answer:
                     return parameter_list
 
                 parameters = build_parameter(response_json["tool_parameter"])
-                self.logger.info("Parameters:")
-                self.logger.info(parameters)
-                self.logger.info("--------------------------------")
 
                 if tool_name == "scrape":
                     if len(parameters) > 1:
@@ -277,9 +317,14 @@ Answer:
                             error_msg = "Scraper returned no output"
                         raise Exception(f"Scraper failed: {error_msg}")
                 elif tool_name == "data_analysis":
-                    output = analysis_agent.analyze(question, instructions, parameters)
+                    # Process additional files using file manager
+                    file_mapping = file_manager.get_files_for_analysis(additional_files)
+                    
+                    output = analysis_agent.analyze(question, instructions, parameters, file_mapping)
                     if output and output.get("status") == "success":
-                        self.context["analysis_results"] = output["data"]
+                        # Process any generated files in the results
+                        processed_results = file_manager.process_analysis_results_files(output["data"])
+                        self.context["analysis_results"] = processed_results
                     else:
                         if output:
                             error_msg = output.get("error", f"Analysis failed with status: {output.get('status', 'unknown')}")
@@ -302,9 +347,6 @@ Answer:
                 else:
                     self.logger.error(f"Tool {tool_name} not found")
                     raise Exception(f"Tool {tool_name} not found")
-                self.logger.info("Current Context:")
-                self.logger.info(self.context)
-                self.logger.info("--------------------------------")
             except Exception as e:
                 self.logger.error(f"Error in orchestrator agent: {e}")
                 return {

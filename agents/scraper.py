@@ -14,7 +14,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 import subprocess
 import os
-from openai import OpenAI
+from langfuse.openai import OpenAI
 from config import LLM_API_KEY
 import logging
 
@@ -33,7 +33,10 @@ class ScraperAgent:
                     {"role": "system", "content": prompt["system_prompt"]}, 
                     {"role": "user", "content": prompt["user_prompt"]}
                 ],
-                temperature=0.1
+                # Langfuse tagging
+                metadata={
+                    "langfuse_tags": ["scraper-agent"]
+                },
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -407,11 +410,7 @@ EXAMPLE OUTPUT FORMAT:
 Be LIBERAL in extraction - if it looks like data, extract it. Don't be picky about HTML structure.
 """
 
-        self.logger.info("Generating targeted custom scraper...")
-        self.logger.info(f"Instructions: {instructions}")
-        self.logger.info(f"Page type: {structure_analysis['page_type']}")
-        self.logger.info(f"Tables found: {structure_analysis['table_count']}")
-        self.logger.info("--------------------------------")
+        # Generate custom scraper using LLM
 
         response = self._get_response({
             "system_prompt": system_prompt,
@@ -701,17 +700,12 @@ Be LIBERAL in extraction - if it looks like data, extract it. Don't be picky abo
                 soup = BeautifulSoup(html_content, 'html.parser')
                 return self._fallback_extraction(soup, instructions)
             
-            self.logger.info("Custom scraper generated successfully")
-            self.logger.info("--------------------------------")
-            
             # Step 5: Execute custom scraper
-            self.logger.info("Executing custom scraper...")
             scraped_data = self._execute_custom_scraper(scraper_code, html_content)
             
             # Step 6: Check if scraper worked, use fallback if needed
             if "error" in scraped_data:
                 self.logger.warning(f"Custom scraper failed: {scraped_data['error']}")
-                self.logger.info("Using fallback extraction...")
                 soup = BeautifulSoup(html_content, 'html.parser')
                 fallback_result = self._fallback_extraction(soup, instructions)
                 fallback_result["debug"]["custom_scraper_error"] = scraped_data["error"]

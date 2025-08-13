@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from langfuse import Langfuse
 
 # Load environment variables
 load_dotenv()
