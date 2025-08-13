@@ -262,9 +262,9 @@ logs/
 *.old
 
 # Large data files
-*.csv
-*.json
-*.xml
+# *.csv
+# *.json
+# *.xml
 *.xlsx
 *.xls
 *.parquet
