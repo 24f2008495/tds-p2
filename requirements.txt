@@ -13,3 +13,4 @@ matplotlib
 seaborn
 duckdb
 langfuse
+urllib3
