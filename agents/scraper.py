@@ -138,7 +138,7 @@ class ScraperAgent:
         for config in browser_configs:
             try:
                 chrome_options = Options()
-                chrome_options.add_argument("--headless")  # Use standard headless mode for Azure VMs
+                chrome_options.add_argument("--headless")  # Use standard headless mode
                 chrome_options.add_argument("--no-sandbox") 
                 chrome_options.add_argument("--disable-dev-shm-usage") # important in servers/containers
                 chrome_options.add_argument("--disable-gpu")  # harmless on Linux; needed on some setups
@@ -163,12 +163,28 @@ class ScraperAgent:
                 chrome_options.add_argument("--ignore-certificate-errors")
                 chrome_options.add_argument("--ignore-ssl-errors")
                 chrome_options.add_argument("--ignore-certificate-errors-spki-list")
-                chrome_options.add_argument("--user-data-dir=/tmp/chrome-user-data")
-                # Additional flags for Azure Linux VMs
+                # Create a unique user data directory to avoid conflicts
+                import tempfile
+                user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
+                chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+                # Critical flags for headless server environments to fix DevToolsActivePort error
                 chrome_options.add_argument("--disable-dev-tools")  # Disable DevTools
                 chrome_options.add_argument("--disable-web-security")  # Disable web security for scraping
                 chrome_options.add_argument("--allow-running-insecure-content")  # Allow insecure content
                 chrome_options.add_argument("--disable-features=VizDisplayCompositor")  # Disable display compositor
+                chrome_options.add_argument("--remote-debugging-port=0")  # Let Chrome choose the port automatically
+                chrome_options.add_argument("--disable-logging")  # Reduce logging
+                chrome_options.add_argument("--disable-background-networking")  # Disable background networking
+                chrome_options.add_argument("--disable-component-update")  # Disable component updates
+                chrome_options.add_argument("--disable-client-side-phishing-detection")  # Disable phishing detection
+                chrome_options.add_argument("--disable-hang-monitor")  # Disable hang monitor
+                chrome_options.add_argument("--disable-popup-blocking")  # Disable popup blocking
+                chrome_options.add_argument("--disable-prompt-on-repost")  # Disable repost prompt
+                chrome_options.add_argument("--disable-domain-reliability")  # Disable domain reliability
+                chrome_options.add_argument("--disable-features=VizDisplayCompositor,VizServiceDisplay")  # Additional display fixes
+                chrome_options.add_argument("--disable-features=AudioServiceOutOfProcess")  # Disable out-of-process audio
+                chrome_options.add_argument("--disable-features=MediaRouter")  # Disable media router
+                chrome_options.add_argument("--single-process")  # Run in single process mode for stability
                 
                 # Try to find Chrome binary
                 chrome_found = False
@@ -231,6 +247,13 @@ class ScraperAgent:
                     except:
                         pass
                     driver = None
+                # Clean up temp user data directory if it was created
+                try:
+                    if 'user_data_dir' in locals() and os.path.exists(user_data_dir):
+                        import shutil
+                        shutil.rmtree(user_data_dir, ignore_errors=True)
+                except:
+                    pass
         
         # If all configurations failed
         self.logger.error("\n" + "="*60)
