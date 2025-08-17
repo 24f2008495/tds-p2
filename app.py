@@ -3,6 +3,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import logging
 import time
+import json
 from pathlib import Path
 from agents.orchestrator import OrchestratorAgent
 # Import our custom modules
@@ -140,7 +141,16 @@ def api_file_upload():
                     if len(result_str) > 100000:
                         logger.warning(f"Response is very large ({len(result_str)} chars), may cause issues")
                     
-                    return jsonify({"status": "success", "result": result})
+                    # If result is a JSON string, parse and return directly (generic approach)
+                    if isinstance(result, str) and result.strip().startswith('{'):
+                        try:
+                            parsed_result = json.loads(result)
+                            logger.info("Parsed JSON result, returning directly")
+                            return jsonify(parsed_result)
+                        except json.JSONDecodeError:
+                            logger.warning("Failed to parse result as JSON, returning wrapped")
+                    
+                    return jsonify(result)
                     
             except Exception as orchestrator_error:
                 elapsed_time = time.time() - start_time
