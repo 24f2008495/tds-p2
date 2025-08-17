@@ -114,6 +114,7 @@ Key requirements:
 7. For images, store the saved filename in the results (not base64)
 8. Be robust to data variations and missing values
 9. Use proper statistical methods for correlations and analysis
+10. When finding specific items from data, return the actual data values (e.g., names, titles, IDs) not descriptive text like "Item at index X"
 
 CRITICAL: Return ONLY plain Python code. Do NOT use markdown code blocks (```python or ```). Do NOT include any explanatory text, comments outside the code, or formatting. Just return the raw Python code that can be executed directly.
 
@@ -149,11 +150,13 @@ CRITICAL: NEVER include base64 data in analysis_results. Always save images as f
 
 RESULT FORMAT: The final result MUST be stored in a variable called 'analysis_results' as a DICTIONARY with descriptive keys. For images, store ONLY the filename:
 analysis_results = {
-    "movies_2bn_before_2020": count_value,
-    "earliest_film_over_1_5bn": film_title,
-    "correlation_rank_peak": correlation_value,
-    "scatterplot_image": saved_filename  # FILENAME ONLY, NOT BASE64
+    "key1": actual_value_from_data,  # MUST be actual values from the data, NOT index references
+    "key2": another_value,
+    "correlation": correlation_value,
+    "visualization": saved_filename  # FILENAME ONLY, NOT BASE64
 }
+
+CRITICAL FOR DATA VALUES: When returning specific items from the data (e.g., names, titles, categories), always return the ACTUAL VALUE from the data, not an index, position, or reference like "Item at index 3". Extract the actual data value from the appropriate column/field.
 
 Available libraries: pandas, numpy, matplotlib, seaborn, re, base64, io, duckdb (via duckdb_conn), file_manager
 
@@ -204,6 +207,7 @@ Generate Python code that:
 5. For visualizations, save using file_manager.save_generated_file() and store filename in results
 6. Handle data cleaning robustly - remove '$', commas, and any non-numeric prefixes/suffixes from monetary values
 7. Convert string numbers to appropriate data types safely
+8. CRITICAL: When returning specific data items, extract the ACTUAL VALUES from the data columns, NOT index references like "Item at index 3"
 
 CRITICAL REMINDER: Return ONLY the raw Python code. NO markdown formatting, NO explanations, NO code blocks.
 
