@@ -33,6 +33,23 @@ class FormatterAgent:
         except Exception as e:
             self.logger.error(f"Error calling OpenAI API: {e}")
             return None
+    
+    def _clean_response(self, response: str) -> str:
+        """Clean up markdown formatting from LLM response"""
+        import re
+        
+        # Remove markdown code blocks (```json, ```, etc.)
+        # This handles patterns like ```json\n{...}\n``` or ```\n{...}\n```
+        cleaned = re.sub(r'```(?:json|javascript|js)?\s*\n?', '', response)
+        cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+        
+        # Remove any remaining backticks at start/end
+        cleaned = cleaned.strip('`')
+        
+        # Clean up extra whitespace
+        cleaned = cleaned.strip()
+        
+        return cleaned
 
     # Removed - now using file_manager.convert_files_in_response()
 
@@ -86,8 +103,9 @@ IMPORTANT:
 - Include filenames exactly as they appear in the analysis results
 - Files will be automatically converted to proper format (base64 for images) after formatting
 - Be precise and complete
+- NEVER use markdown formatting (```json, ```, etc.) - return clean output only
 
-OUTPUT FORMAT: Return the final formatted response exactly as requested in the question."""
+OUTPUT FORMAT: Return the final formatted response exactly as requested in the question. Do NOT wrap in markdown code blocks."""
 
             user_prompt = f"""
 Original Question: {question}
@@ -111,8 +129,11 @@ Please format this data into the exact response format requested in the original
             if not formatted_response:
                 return {"status": "error", "error": "Failed to generate formatted response"}
             
+            # Clean up markdown formatting
+            cleaned_response = self._clean_response(formatted_response)
+            
             # Convert file references to base64 data URIs for final output using file manager
-            final_response = file_manager.convert_files_in_response(main_data, formatted_response)
+            final_response = file_manager.convert_files_in_response(main_data, cleaned_response)
             
             # Check if response is too long and might cause issues
             if len(final_response) > 50000:
