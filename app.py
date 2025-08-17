@@ -75,35 +75,51 @@ def validate_and_fix_base64_urls(data):
 
 def validate_base64_integrity(data):
     """
-    Validate that base64 data URIs are properly formatted and contain valid base64 data.
-    This ensures the API returns only valid base64 strings.
+    Validate that base64 data is properly formatted.
+    This handles both raw base64 strings and data URI formatted strings.
     """
     if isinstance(data, dict):
         for key, value in data.items():
-            if isinstance(value, str) and value.startswith("data:"):
-                try:
-                    # Check if it's a valid data URI format
-                    if ";" not in value or "," not in value:
-                        logger.error(f"Invalid data URI format in key '{key}': missing separator")
-                        continue
-                    
-                    # Extract the base64 part
-                    header, base64_data = value.split(",", 1)
-                    
-                    # Validate base64 data
-                    if base64_data:
+            if isinstance(value, str):
+                # Check if it's a data URI format
+                if value.startswith("data:"):
+                    try:
+                        # Check if it's a valid data URI format
+                        if ";" not in value or "," not in value:
+                            logger.error(f"Invalid data URI format in key '{key}': missing separator")
+                            continue
+                        
+                        # Extract the base64 part
+                        header, base64_data = value.split(",", 1)
+                        
+                        # Validate base64 data
+                        if base64_data:
+                            # Try to decode a small portion to validate base64
+                            test_data = base64_data[:100]  # Test first 100 chars
+                            try:
+                                import base64 as base64_module
+                                base64_module.b64decode(test_data + "=" * (-len(test_data) % 4))
+                            except Exception as e:
+                                logger.error(f"Invalid base64 data in key '{key}': {str(e)}")
+                                # Remove the invalid base64 string
+                                data[key] = f"[INVALID_BASE64: {str(e)}]"
+                        
+                    except Exception as e:
+                        logger.error(f"Error validating base64 in key '{key}': {str(e)}")
+                
+                # Check if it looks like raw base64 data (common keys for images)
+                elif key.lower() in ['bar_chart', 'line_chart', 'scatter_plot', 'histogram', 'pie_chart', 'graph', 'chart', 'image'] and len(value) > 100:
+                    try:
                         # Try to decode a small portion to validate base64
-                        test_data = base64_data[:100]  # Test first 100 chars
-                        try:
-                            import base64 as base64_module
-                            base64_module.b64decode(test_data + "=" * (-len(test_data) % 4))
-                        except Exception as e:
-                            logger.error(f"Invalid base64 data in key '{key}': {str(e)}")
-                            # Remove the invalid base64 string
-                            data[key] = f"[INVALID_BASE64: {str(e)}]"
-                    
-                except Exception as e:
-                    logger.error(f"Error validating base64 in key '{key}': {str(e)}")
+                        test_data = value[:100]  # Test first 100 chars
+                        import base64 as base64_module
+                        base64_module.b64decode(test_data + "=" * (-len(test_data) % 4))
+                        logger.info(f"Validated raw base64 data in key '{key}' ({len(value)} chars)")
+                    except Exception as e:
+                        logger.error(f"Invalid raw base64 data in key '{key}': {str(e)}")
+                        # Keep the data as is, but log the error
+                        pass
+                        
             elif isinstance(value, (dict, list)):
                 # Recursively check nested structures
                 validate_base64_integrity(value)
@@ -224,20 +240,18 @@ def api_file_upload():
                     if len(result_str) > 100000:
                         logger.warning(f"Response is very large ({len(result_str)} chars), may cause issues")
                     
-                    # Validate and fix any malformed base64 URLs before returning
+                    # Validate base64 integrity for response
                     if isinstance(result, dict):
-                        result = validate_and_fix_base64_urls(result)
                         result = validate_base64_integrity(result)
-                        logger.info("Validated and fixed base64 URLs in response")
+                        logger.info("Validated base64 data in response")
                     
                     # If result is a JSON string, parse and return directly (generic approach)
                     if isinstance(result, str) and result.strip().startswith('{'):
                         try:
                             parsed_result = json.loads(result)
-                            # Validate and fix base64 URLs in parsed result
-                            parsed_result = validate_and_fix_base64_urls(parsed_result)
+                            # Validate base64 data in parsed result
                             parsed_result = validate_base64_integrity(parsed_result)
-                            logger.info("Parsed JSON result, validated base64 URLs, returning directly")
+                            logger.info("Parsed JSON result, validated base64 data, returning directly")
                             response = jsonify(parsed_result)
                             response.headers['X-Base64-Validated'] = 'true'
                             return response

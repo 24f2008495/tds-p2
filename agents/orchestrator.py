@@ -333,7 +333,7 @@ Answer:
                             error_msg = "Analysis agent returned no output"
                         raise Exception(f"Analysis failed: {error_msg}")
                 elif tool_name == "format_final_output":
-                    output = formatter_agent.format(question, instructions, parameters)
+                    output = formatter_agent.format(question, instructions, parameters, api_mode=True)
                     if output and output.get("status") == "success":
                         self.context["final_output"] = output["data"]
                         return output["data"]

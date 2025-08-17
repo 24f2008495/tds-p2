@@ -185,15 +185,16 @@ class FileManager:
             print(f"Error reading file {filename}: {str(e)}")
             raise
     
-    def convert_file_to_base64(self, filename: str) -> str:
+    def convert_file_to_base64(self, filename: str, raw_base64: bool = False) -> str:
         """
         Convert a file to base64 data URI for final output.
         
         Args:
             filename: The filename to convert
+            raw_base64: If True, return only the raw base64 data without the data URI prefix
             
         Returns:
-            str: Base64 data URI string
+            str: Base64 data URI string or raw base64 data
         """
         try:
             file_path = self.get_file_path(filename)
@@ -204,6 +205,11 @@ class FileManager:
             
             # Encode to base64
             base64_data = base64.b64encode(file_bytes).decode('utf-8')
+            
+            # If raw base64 requested, return just the base64 data
+            if raw_base64:
+                print(f"Converted {filename} to raw base64 ({len(base64_data)} chars)")
+                return base64_data
             
             # Determine MIME type based on extension
             ext = os.path.splitext(filename)[1].lower()
@@ -424,6 +430,72 @@ class FileManager:
                     
             except Exception as e:
                 print(f"Error converting file {filename} to base64: {e}")
+                # Keep the original filename if conversion fails
+                continue
+                            
+        return formatted_response
+
+    def convert_files_in_response_to_raw_base64(self, data: Dict[str, Any], formatted_response: str) -> str:
+        """
+        Convert file references in a formatted response to raw base64 data (without data URI prefix).
+        This is specifically for API responses where the test framework expects raw base64.
+        
+        Args:
+            data: Original data containing file references
+            formatted_response: The formatted response string
+            
+        Returns:
+            str: Response with file references converted to raw base64 data
+        """
+        import re
+        
+        # Find all file references in the original data
+        file_references = []
+        
+        if isinstance(data, dict):
+            # Check regular dict keys
+            for key, value in data.items():
+                if isinstance(value, str) and self.is_filename(value):
+                    file_references.append((key, value))
+            
+            # Check _list_data if it exists
+            if "_list_data" in data:
+                for i, item in enumerate(data["_list_data"]):
+                    if isinstance(item, str) and self.is_filename(item):
+                        file_references.append((f"list_item_{i}", item))
+        
+        print(f"Converting {len(file_references)} file references to raw base64 for API output")
+        
+        # Convert each file to raw base64 and replace in response
+        for key, filename in file_references:
+            try:
+                # Convert file to raw base64 (without data URI prefix)
+                raw_base64 = self.convert_file_to_base64(filename, raw_base64=True)
+                
+                # Escape quotes in the base64 data for JSON safety
+                escaped_base64 = raw_base64.replace('"', '\\"')
+                
+                # Replace file reference placeholders
+                placeholder_patterns = [
+                    rf'\[FILE_AVAILABLE: {re.escape(filename)}\]',
+                    rf'"{re.escape(filename)}"',
+                    rf'{re.escape(filename)}'
+                ]
+                
+                replaced = False
+                for pattern in placeholder_patterns:
+                    if re.search(pattern, formatted_response):
+                        # Always use proper JSON string format
+                        formatted_response = re.sub(pattern, f'"{escaped_base64}"', formatted_response)
+                        replaced = True
+                        print(f"Replaced file {filename} with raw base64 data in API output")
+                        break
+                
+                if not replaced:
+                    print(f"Warning: No placeholder found for file {filename}")
+                    
+            except Exception as e:
+                print(f"Error converting file {filename} to raw base64: {e}")
                 # Keep the original filename if conversion fails
                 continue
                             

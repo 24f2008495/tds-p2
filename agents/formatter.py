@@ -53,7 +53,7 @@ class FormatterAgent:
 
     # Removed - now using file_manager.convert_files_in_response()
 
-    def format(self, question: str, instructions: str, parameters: List[Any]):
+    def format(self, question: str, instructions: str, parameters: List[Any], api_mode: bool = True):
         """Format the final output based on question, instructions, and available data"""
         self.logger.info("Formatting final output...")
         self.logger.info(f"Question: {question}")
@@ -132,8 +132,15 @@ Please format this data into the exact response format requested in the original
             # Clean up markdown formatting
             cleaned_response = self._clean_response(formatted_response)
             
-            # Convert file references to base64 data URIs for final output using file manager
-            final_response = file_manager.convert_files_in_response(main_data, cleaned_response)
+            # Convert file references to base64 for final output using file manager
+            if api_mode:
+                # For API responses, use raw base64 to avoid double prefix issues with test frameworks
+                final_response = file_manager.convert_files_in_response_to_raw_base64(main_data, cleaned_response)
+                self.logger.info("Converted files to raw base64 for API response")
+            else:
+                # For other outputs, use full data URIs
+                final_response = file_manager.convert_files_in_response(main_data, cleaned_response)
+                self.logger.info("Converted files to data URIs for standard response")
             
             # Check if response is too long and might cause issues
             if len(final_response) > 50000:
