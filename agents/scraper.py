@@ -4,6 +4,7 @@ import re
 from typing import Dict, List, Any, Optional
 from urllib.parse import urlparse
 import time
+import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -114,17 +115,38 @@ class ScraperAgent:
         """Fetch page content using Selenium for maximum reliability"""
         self.logger.info(f"Fetching content from: {url}")
         self.logger.info("Using Selenium for reliable content extraction...")
-        return self._fetch_with_selenium(url)
+        
+        # Try Selenium first
+        content = self._fetch_with_selenium(url)
+        if content:
+            return content
+            
+        # If Selenium fails, try requests as fallback
+        self.logger.warning("Selenium failed, trying requests as fallback...")
+        return self._fetch_with_requests(url)
 
     def _fetch_with_selenium(self, url: str) -> Optional[str]:
         """Fetch page content using Selenium for dynamic content"""
         driver = None
         
-        # Try multiple browser configurations
+        # Try multiple browser configurations with different headless modes
         browser_configs = [
-            # Chrome with binary path
+            # Chrome with new headless mode
             {
                 'browser': 'chrome',
+                'headless_mode': 'new',
+                'binary_paths': [
+                    '/usr/bin/google-chrome',
+                    '/usr/bin/google-chrome-stable', 
+                    '/usr/bin/chromium-browser',
+                    '/usr/bin/chromium',
+                    '/snap/bin/chromium'
+                ]
+            },
+            # Chrome with old headless mode as fallback
+            {
+                'browser': 'chrome',
+                'headless_mode': 'old',
                 'binary_paths': [
                     '/usr/bin/google-chrome',
                     '/usr/bin/google-chrome-stable', 
@@ -138,53 +160,39 @@ class ScraperAgent:
         for config in browser_configs:
             try:
                 chrome_options = Options()
-                chrome_options.add_argument("--headless")  # Use standard headless mode
+                # Essential headless Chrome configuration for server environments
+                if config['headless_mode'] == 'new':
+                    chrome_options.add_argument("--headless=new")  # Use new headless mode
+                else:
+                    chrome_options.add_argument("--headless")  # Use old headless mode
                 chrome_options.add_argument("--no-sandbox") 
-                chrome_options.add_argument("--disable-dev-shm-usage") # important in servers/containers
-                chrome_options.add_argument("--disable-gpu")  # harmless on Linux; needed on some setups
-                chrome_options.add_argument("--disable-software-rasterizer")
-                chrome_options.add_argument("--window-size=1920,1080")
-                chrome_options.add_argument("--disable-background-timer-throttling")
-                chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-                chrome_options.add_argument("--disable-renderer-backgrounding")
-                chrome_options.add_argument("--disable-features=TranslateUI")
-                chrome_options.add_argument("--disable-ipc-flooding-protection")
-                chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+                chrome_options.add_argument("--disable-gpu")
                 chrome_options.add_argument("--disable-extensions")
                 chrome_options.add_argument("--disable-plugins")
-                chrome_options.add_argument("--disable-default-apps")
-                chrome_options.add_argument("--disable-sync")
-                chrome_options.add_argument("--disable-translate")
-                chrome_options.add_argument("--hide-scrollbars")
-                chrome_options.add_argument("--metrics-recording-only")
-                chrome_options.add_argument("--mute-audio")
+                chrome_options.add_argument("--disable-images")  # Speed up by not loading images
+                chrome_options.add_argument("--window-size=1920,1080")
                 chrome_options.add_argument("--no-first-run")
-                chrome_options.add_argument("--safebrowsing-disable-auto-update")
+                chrome_options.add_argument("--disable-default-apps")
+                chrome_options.add_argument("--disable-popup-blocking")
+                chrome_options.add_argument("--disable-translate")
                 chrome_options.add_argument("--ignore-certificate-errors")
                 chrome_options.add_argument("--ignore-ssl-errors")
                 chrome_options.add_argument("--ignore-certificate-errors-spki-list")
+                chrome_options.add_argument("--disable-web-security")
+                chrome_options.add_argument("--allow-running-insecure-content")
+                chrome_options.add_argument("--disable-features=VizDisplayCompositor")
                 # Create a unique user data directory to avoid conflicts
                 import tempfile
                 user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
                 chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-                # Critical flags for headless server environments to fix DevToolsActivePort error
-                chrome_options.add_argument("--disable-dev-tools")  # Disable DevTools
-                chrome_options.add_argument("--disable-web-security")  # Disable web security for scraping
-                chrome_options.add_argument("--allow-running-insecure-content")  # Allow insecure content
-                chrome_options.add_argument("--disable-features=VizDisplayCompositor")  # Disable display compositor
-                chrome_options.add_argument("--remote-debugging-port=0")  # Let Chrome choose the port automatically
-                chrome_options.add_argument("--disable-logging")  # Reduce logging
-                chrome_options.add_argument("--disable-background-networking")  # Disable background networking
-                chrome_options.add_argument("--disable-component-update")  # Disable component updates
-                chrome_options.add_argument("--disable-client-side-phishing-detection")  # Disable phishing detection
-                chrome_options.add_argument("--disable-hang-monitor")  # Disable hang monitor
-                chrome_options.add_argument("--disable-popup-blocking")  # Disable popup blocking
-                chrome_options.add_argument("--disable-prompt-on-repost")  # Disable repost prompt
-                chrome_options.add_argument("--disable-domain-reliability")  # Disable domain reliability
-                chrome_options.add_argument("--disable-features=VizDisplayCompositor,VizServiceDisplay")  # Additional display fixes
-                chrome_options.add_argument("--disable-features=AudioServiceOutOfProcess")  # Disable out-of-process audio
-                chrome_options.add_argument("--disable-features=MediaRouter")  # Disable media router
-                chrome_options.add_argument("--single-process")  # Run in single process mode for stability
+                # Disable crash reporting and other services that might cause issues
+                chrome_options.add_argument("--disable-crash-reporter")
+                chrome_options.add_argument("--disable-in-process-stack-traces")
+                chrome_options.add_argument("--disable-logging")
+                chrome_options.add_argument("--disable-dev-tools")
+                chrome_options.add_argument("--log-level=3")  # Only show fatal errors
+                chrome_options.add_argument("--silent")
                 
                 # Try to find Chrome binary
                 chrome_found = False
@@ -272,6 +280,21 @@ class ScraperAgent:
         self.logger.error("="*60)
         
         return None
+
+    def _fetch_with_requests(self, url: str) -> Optional[str]:
+        """Fallback method using requests library"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            self.logger.info(f"Attempting requests fallback for: {url}")
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            self.logger.info(f"Successfully fetched content with requests ({len(response.text)} characters)")
+            return response.text
+        except Exception as e:
+            self.logger.error(f"Requests fallback failed: {e}")
+            return None
 
     def _analyze_page_structure(self, html_content: str, url: str) -> Dict[str, Any]:
         """Analyze the page structure and identify key elements"""
