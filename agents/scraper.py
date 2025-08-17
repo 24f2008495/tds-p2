@@ -138,7 +138,7 @@ class ScraperAgent:
         for config in browser_configs:
             try:
                 chrome_options = Options()
-                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--headless")  # Use standard headless mode for Azure VMs
                 chrome_options.add_argument("--no-sandbox") 
                 chrome_options.add_argument("--disable-dev-shm-usage") # important in servers/containers
                 chrome_options.add_argument("--disable-gpu")  # harmless on Linux; needed on some setups
@@ -164,6 +164,11 @@ class ScraperAgent:
                 chrome_options.add_argument("--ignore-ssl-errors")
                 chrome_options.add_argument("--ignore-certificate-errors-spki-list")
                 chrome_options.add_argument("--user-data-dir=/tmp/chrome-user-data")
+                # Additional flags for Azure Linux VMs
+                chrome_options.add_argument("--disable-dev-tools")  # Disable DevTools
+                chrome_options.add_argument("--disable-web-security")  # Disable web security for scraping
+                chrome_options.add_argument("--allow-running-insecure-content")  # Allow insecure content
+                chrome_options.add_argument("--disable-features=VizDisplayCompositor")  # Disable display compositor
                 
                 # Try to find Chrome binary
                 chrome_found = False
