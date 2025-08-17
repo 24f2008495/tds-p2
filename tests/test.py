@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 # Configuration
-API_BASE_URL = "http://localhost:5000/api/"
+API_BASE_URL = "https://api.dhruvagoyal.com/api/"
 TEST_FILES_DIR = Path(__file__).parent
 
 def send_request(question_file_path, additional_files=None):
