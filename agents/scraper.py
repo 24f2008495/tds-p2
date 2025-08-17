@@ -5,15 +5,7 @@ from typing import Dict, List, Any, Optional
 from urllib.parse import urlparse
 import time
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
-import subprocess
+
 import os
 from langfuse.openai import OpenAI
 from config import LLM_API_KEY
@@ -44,65 +36,7 @@ class ScraperAgent:
             self.logger.error(f"Error calling OpenAI API: {e}")
             return None
 
-    def _get_browser_version(self, binary_path: str) -> Optional[str]:
-        """Get the version of the browser binary"""
-        try:
-            result = subprocess.run([binary_path, '--version'], 
-                                 capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                version_output = result.stdout.strip()
-                # Extract version number (e.g., "Chromium 138.0.6971.118" -> "138.0.6971.118")
-                import re
-                version_match = re.search(r'(\d+\.\d+\.\d+\.\d+)', version_output)
-                if version_match:
-                    version = version_match.group(1)
-                    self.logger.info(f"Detected browser version: {version}")
-                    return version
-        except Exception as e:
-            self.logger.warning(f"Could not detect browser version: {e}")
-            return None
 
-    def _get_compatible_driver(self, browser_version: str, binary_path: str) -> str:
-        """Get a compatible ChromeDriver for the browser version"""
-        try:
-            # Extract major version
-            major_version = browser_version.split('.')[0]
-            self.logger.info(f"Browser major version: {major_version}")
-            
-            # Use cached driver if available
-            cache_dir = os.path.expanduser("~/.wdm/drivers/chromedriver")
-            
-            # Try to get the correct driver version
-            # Check if we need a specific version for newer Chromium
-            if int(major_version) >= 115:
-                # For newer versions, try to get latest driver
-                try:
-                    driver_manager = ChromeDriverManager(driver_version="latest")
-                    driver_path = driver_manager.install()
-                    self.logger.info(f"Using latest driver: {driver_path}")
-                    return driver_path
-                except Exception as e:
-                    self.logger.warning(f"Could not get latest driver: {e}")
-            
-            # For Chromium, try to get the appropriate driver
-            if 'chromium' in binary_path.lower():
-                try:
-                    driver_manager = ChromeDriverManager(chrome_type=ChromeType.CHROMIUM)
-                    driver_path = driver_manager.install()
-                    self.logger.info(f"Using Chromium driver: {driver_path}")
-                    return driver_path
-                except Exception as e:
-                    self.logger.warning(f"Chromium driver failed: {e}")
-            
-            # Default fallback
-            driver_manager = ChromeDriverManager()
-            driver_path = driver_manager.install()
-            self.logger.info(f"Using default driver: {driver_path}")
-            return driver_path
-                
-        except Exception as e:
-            self.logger.error(f"Error getting compatible driver: {e}")
-            return ChromeDriverManager().install()
 
     def _extract_url_from_parameter(self, parameter: str) -> str:
         """Extract URL from parameter string that may contain @ symbol"""
@@ -112,188 +46,23 @@ class ScraperAgent:
         return url
 
     def _fetch_page_content(self, url: str) -> Optional[str]:
-        """Fetch page content using Selenium for maximum reliability"""
+        """Fetch page content using requests library"""
         self.logger.info(f"Fetching content from: {url}")
-        self.logger.info("Using Selenium for reliable content extraction...")
-        
-        # Try Selenium first
-        content = self._fetch_with_selenium(url)
-        if content:
-            return content
-            
-        # If Selenium fails, try requests as fallback
-        self.logger.warning("Selenium failed, trying requests as fallback...")
         return self._fetch_with_requests(url)
 
-    def _fetch_with_selenium(self, url: str) -> Optional[str]:
-        """Fetch page content using Selenium for dynamic content"""
-        driver = None
-        
-        # Try multiple browser configurations with different headless modes
-        browser_configs = [
-            # Chrome with new headless mode
-            {
-                'browser': 'chrome',
-                'headless_mode': 'new',
-                'binary_paths': [
-                    '/usr/bin/google-chrome',
-                    '/usr/bin/google-chrome-stable', 
-                    '/usr/bin/chromium-browser',
-                    '/usr/bin/chromium',
-                    '/snap/bin/chromium'
-                ]
-            },
-            # Chrome with old headless mode as fallback
-            {
-                'browser': 'chrome',
-                'headless_mode': 'old',
-                'binary_paths': [
-                    '/usr/bin/google-chrome',
-                    '/usr/bin/google-chrome-stable', 
-                    '/usr/bin/chromium-browser',
-                    '/usr/bin/chromium',
-                    '/snap/bin/chromium'
-                ]
-            }
-        ]
-        
-        for config in browser_configs:
-            try:
-                chrome_options = Options()
-                # Essential headless Chrome configuration for server environments
-                if config['headless_mode'] == 'new':
-                    chrome_options.add_argument("--headless=new")  # Use new headless mode
-                else:
-                    chrome_options.add_argument("--headless")  # Use old headless mode
-                chrome_options.add_argument("--no-sandbox") 
-                chrome_options.add_argument("--disable-dev-shm-usage")
-                chrome_options.add_argument("--disable-gpu")
-                chrome_options.add_argument("--disable-extensions")
-                chrome_options.add_argument("--disable-plugins")
-                chrome_options.add_argument("--disable-images")  # Speed up by not loading images
-                chrome_options.add_argument("--window-size=1920,1080")
-                chrome_options.add_argument("--no-first-run")
-                chrome_options.add_argument("--disable-default-apps")
-                chrome_options.add_argument("--disable-popup-blocking")
-                chrome_options.add_argument("--disable-translate")
-                chrome_options.add_argument("--ignore-certificate-errors")
-                chrome_options.add_argument("--ignore-ssl-errors")
-                chrome_options.add_argument("--ignore-certificate-errors-spki-list")
-                chrome_options.add_argument("--disable-web-security")
-                chrome_options.add_argument("--allow-running-insecure-content")
-                chrome_options.add_argument("--disable-features=VizDisplayCompositor")
-                # Create a unique user data directory to avoid conflicts
-                import tempfile
-                user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
-                chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-                # Disable crash reporting and other services that might cause issues
-                chrome_options.add_argument("--disable-crash-reporter")
-                chrome_options.add_argument("--disable-in-process-stack-traces")
-                chrome_options.add_argument("--disable-logging")
-                chrome_options.add_argument("--disable-dev-tools")
-                chrome_options.add_argument("--log-level=3")  # Only show fatal errors
-                chrome_options.add_argument("--silent")
-                
-                # Try to find Chrome binary
-                chrome_found = False
-                selected_binary = None
-                browser_version = None
-                
-                for binary_path in config['binary_paths']:
-                    try:
-                        if os.path.exists(binary_path):
-                            chrome_options.binary_location = binary_path
-                            selected_binary = binary_path
-                            chrome_found = True
-                            self.logger.info(f"Using Chrome binary at: {binary_path}")
-                            
-                            # Get browser version
-                            browser_version = self._get_browser_version(binary_path)
-                            break
-                    except:
-                        continue
-                
-                if not chrome_found:
-                    self.logger.info("No Chrome binary found, trying default...")
-                    selected_binary = None
-                
-                # Get compatible driver
-                if browser_version and selected_binary:
-                    driver_path = self._get_compatible_driver(browser_version, selected_binary)
-                else:
-                    driver_path = ChromeDriverManager().install()
-                
-                service = Service(driver_path)
-                driver = webdriver.Chrome(service=service, options=chrome_options)
-                
-                # Remove webdriver property
-                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                
-                # Navigate to URL
-                self.logger.info(f"Navigating to: {url}")
-                driver.get(url)
-                
-                # Wait for page to load
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                
-                # Additional wait for dynamic content
-                time.sleep(2)
-                
-                page_source = driver.page_source
-                self.logger.info(f"Successfully fetched page content ({len(page_source)} characters)")
-                return page_source
-                
-            except Exception as e:
-                self.logger.error(f"Browser config failed: {e}")
-                continue
-            finally:
-                if driver:
-                    try:
-                        driver.quit()
-                    except:
-                        pass
-                    driver = None
-                # Clean up temp user data directory if it was created
-                try:
-                    if 'user_data_dir' in locals() and os.path.exists(user_data_dir):
-                        import shutil
-                        shutil.rmtree(user_data_dir, ignore_errors=True)
-                except:
-                    pass
-        
-        # If all configurations failed
-        self.logger.error("\n" + "="*60)
-        self.logger.error("BROWSER SETUP FAILED - VERSION MISMATCH DETECTED")
-        self.logger.error("="*60)
-        self.logger.error("Your Chromium version is too new for available ChromeDrivers.")
-        self.logger.error("Let's install Google Chrome which has better driver support:")
-        self.logger.error("")
-        self.logger.error("Run these commands to install Google Chrome:")
-        self.logger.error("wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -")
-        self.logger.error("echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' | sudo tee /etc/apt/sources.list.d/google-chrome.list")
-        self.logger.error("sudo apt-get update && sudo apt-get install google-chrome-stable")
-        self.logger.error("")
-        self.logger.error("OR try this command to install a compatible Chromium version:")
-        self.logger.error("sudo apt-get remove chromium-browser && sudo apt-get install google-chrome-stable")
-        self.logger.error("="*60)
-        
-        return None
-
     def _fetch_with_requests(self, url: str) -> Optional[str]:
-        """Fallback method using requests library"""
+        """Fetch page content using requests library"""
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
-            self.logger.info(f"Attempting requests fallback for: {url}")
+            self.logger.info(f"Fetching page content for: {url}")
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
-            self.logger.info(f"Successfully fetched content with requests ({len(response.text)} characters)")
+            self.logger.info(f"Successfully fetched content ({len(response.text)} characters)")
             return response.text
         except Exception as e:
-            self.logger.error(f"Requests fallback failed: {e}")
+            self.logger.error(f"Failed to fetch content: {e}")
             return None
 
     def _analyze_page_structure(self, html_content: str, url: str) -> Dict[str, Any]:
