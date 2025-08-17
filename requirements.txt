@@ -14,3 +14,4 @@ seaborn
 duckdb
 langfuse
 urllib3
+gunicorn
