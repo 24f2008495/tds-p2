@@ -15,3 +15,8 @@ duckdb
 langfuse
 urllib3
 gunicorn
+networkx
+scipy
+scikit-learn
+plotly
+statsmodels

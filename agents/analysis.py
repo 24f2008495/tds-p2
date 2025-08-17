@@ -158,7 +158,7 @@ analysis_results = {
 
 CRITICAL FOR DATA VALUES: When returning specific items from the data (e.g., names, titles, categories), always return the ACTUAL VALUE from the data, not an index, position, or reference like "Item at index 3". Extract the actual data value from the appropriate column/field.
 
-Available libraries: pandas, numpy, matplotlib, seaborn, re, base64, io, duckdb (via duckdb_conn), file_manager
+Available libraries: pandas, numpy, matplotlib, seaborn, re, base64, io, duckdb (via duckdb_conn), file_manager, json, datetime, networkx (as nx), scipy (with stats), sklearn (with linear_model, metrics), plotly, statsmodels
 
 ADDITIONAL FILES ACCESS:
 - Additional files are saved and their paths are available in the 'file_mapping' dictionary
@@ -329,8 +329,42 @@ REMINDER: For any visualizations/plots:
                 'analysis_results': {},
                 'file_mapping': file_mapping,  # Make file mapping available to the code
                 'file_manager': file_manager,  # Make file manager available
-                'os': __import__('os')  # Make os module available
+                'os': __import__('os'),  # Make os module available
+                'json': __import__('json'),  # JSON module
+                'datetime': __import__('datetime'),  # Datetime module
             }
+            
+            # Add optional libraries that might be used
+            try:
+                exec_globals['networkx'] = __import__('networkx')
+                exec_globals['nx'] = __import__('networkx')
+            except ImportError:
+                pass
+            
+            try:
+                exec_globals['scipy'] = __import__('scipy')
+                from scipy import stats
+                exec_globals['stats'] = stats
+            except ImportError:
+                pass
+            
+            try:
+                exec_globals['sklearn'] = __import__('sklearn')
+                from sklearn import linear_model, metrics
+                exec_globals['linear_model'] = linear_model
+                exec_globals['metrics'] = metrics
+            except ImportError:
+                pass
+            
+            try:
+                exec_globals['plotly'] = __import__('plotly')
+            except ImportError:
+                pass
+            
+            try:
+                exec_globals['statsmodels'] = __import__('statsmodels')
+            except ImportError:
+                pass
             
             # Execute the generated code
             exec(clean_code, exec_globals)
